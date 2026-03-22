@@ -1,6 +1,5 @@
 import axios from "axios";
 
-let accessToken = ""; // luego esto debería venir de DB
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -10,6 +9,7 @@ export async function GET(request: Request) {
     return Response.json({ error: "Missing query" }, { status: 400 });
   }
 
+  const accessToken = getAccessToken()
   try {
     const response = await axios.get(
       `https://api.mercadolibre.com/sites/MLA/search?q=${encodeURIComponent(q)}`,
@@ -49,8 +49,8 @@ async function getAccessToken() {
         refresh_token: tokens.refresh_token,
       }),
       {
-          headers: {
-          Authorization: `Bearer ${accessToken}`,
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
         },
       }
     );

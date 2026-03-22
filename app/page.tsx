@@ -5,7 +5,7 @@ export default function Home() {
   const [query, setQuery] = useState<string>("")
   const [results, setResults] = useState<any[]>([])
   const handleSearch = async () => {
-    const res = await fetch(`/api/ml/search?q=${encodeURIComponent(query)}`);
+    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
     const data = await res.json();
 
     if (!res.ok) {

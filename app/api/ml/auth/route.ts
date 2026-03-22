@@ -1,4 +1,5 @@
 import axios from "axios";
+import { NextResponse } from "next/server";
 
 declare global {
   var meliTokens: {
@@ -49,7 +50,7 @@ export async function POST(request: Request) {
     console.log("Access Token:", access_token);
     console.log("Refresh Token:", myRefreshToken);
 
-    return Response.json(response.data);
+    return NextResponse.redirect(new URL('/'), 200);
   } catch (error: any) {
     return Response.json(
       { error: error.response?.data || error.message },
