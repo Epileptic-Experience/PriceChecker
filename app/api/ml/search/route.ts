@@ -1,66 +1,66 @@
 import axios from "axios";
-import { NextResponse } from "next/server";
+
 
 export async function GET(request: Request) {
-  console.log("entro route");
-
   const { searchParams } = new URL(request.url);
-  const query = searchParams.get("q");
+  const q = searchParams.get("q");
 
-  if (!query) {
-    return NextResponse.json({ error: "Falta el parametro q" }, { status: 400 });
+  if (!q) {
+    return Response.json({ error: "Missing query" }, { status: 400 });
   }
 
+  const accessToken = getAccessToken()
   try {
-    const res = await axios.get("https://api.mercadolibre.com/sites/MLA/search", {
-      params: {
-        q: query,
-        limit: 200,
-      },
-      headers: {
-        "user-agent": "Mozilla/5.0",
-      },
-    });
-
-    return NextResponse.json(res.data.results);
-  } catch (error) {
-    if (axios.isAxiosError(error)) {
-      const status = error.response?.status ?? 502;
-      const details = {
-        message: error.message,
-        code: error.code,
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data,
-        url: error.config?.url,
-        params: error.config?.params,
-      };
-
-      console.error("Ocurrio un error al buscar en Mercado Libre", {
-        query,
-        ...details,
-      });
-
-      return NextResponse.json(
-        {
-          error: "Ocurrio un error al buscar",
-          details,
+    const response = await axios.get(
+      `https://api.mercadolibre.com/sites/MLA/search?q=${encodeURIComponent(q)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
         },
-        { status }
-      );
-    } else {
-      console.error("Ocurrio un error inesperado al buscar", {
-        query,
-        error,
-      });
+      }
+    );
 
-      return NextResponse.json(
-        {
-          error: "Ocurrio un error inesperado al buscar",
-          details: String(error),
-        },
-        { status: 500 }
-      );
-    }
+    return Response.json(response.data.results);
+  } catch (error: any) {
+    return Response.json(
+      { error: error.response?.data || error.message },
+      { status: 500 }
+    );
   }
+}
+
+async function getAccessToken() {
+  const tokens = (globalThis as any).meliTokens;
+
+  if (!tokens) {
+    throw new Error("No tokens available. Authenticate first.");
+  }
+
+  const now = Date.now();
+
+  // Si expiró → refrescar
+  if (now >= tokens.expires_at) {
+    const response = await axios.post(
+      "https://api.mercadolibre.com/oauth/token",
+      new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: process.env.CLIENT_ID!,
+        client_secret: process.env.CLIENT_SECRET!,
+        refresh_token: tokens.refresh_token,
+      }),
+      {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+      }
+    );
+
+    const refreshed = response.data;
+
+    tokens.access_token = refreshed.access_token;
+    tokens.refresh_token = refreshed.refresh_token;
+    tokens.expires_at = Date.now() + refreshed.expires_in * 1000;
+  }
+
+  return tokens.access_token;
 }
