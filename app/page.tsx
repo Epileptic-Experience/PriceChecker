@@ -4,11 +4,6 @@ import { useState } from "react";
 export default function Home() {
   const [query, setQuery] = useState<string>("")
   const [results, setResults] = useState<any[]>([])
-
-  const access =  localStorage.getItem("acces") 
-  const refresh = localStorage.getItem("refresh") 
-   
-
   const handleSearch = async () => {
     const res = await fetch(`/api/ml/search?q=${encodeURIComponent(query)}`);
     const data = await res.json();
