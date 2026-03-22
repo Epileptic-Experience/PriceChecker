@@ -1,38 +1,54 @@
 "use client"
-import { useEffect, useState } from "react";
-// import { getProducts } from "@/api/ml/search/route";
+import { useState } from "react";
 
 export default function Home() {
   const [query, setQuery] = useState<string>("")
   const [results, setResults] = useState<any[]>([])
 
-const handleSearch = async () => {
-  console.log("entro funcion")
-  const res = await fetch(`/api/ml/search?q=${encodeURIComponent(query)}`);
-  const data = await res.json();
+  const access =  localStorage.getItem("acces") 
+  const refresh = localStorage.getItem("refresh") 
+   
 
-  if (!res.ok) {
-    console.error("Fallo la busqueda", {
-      status: res.status,
-      data,
-    });
-    return;
-  }
+  const handleSearch = async () => {
+    const res = await fetch(`/api/ml/search?q=${encodeURIComponent(query)}`);
+    const data = await res.json();
 
-  setResults(data);
-};
+    if (!res.ok) {
+      console.error("Fallo la busqueda", data);
+      return;
+    }
 
-  // useEffect(()=>{
-  //   console.log(results,"RESULTADOS" )
-  // },[results])
+    setResults(data);
+  };
+
+  const handleLogin = () => {
+    const client_id = process.env.NEXT_PUBLIC_CLIENT_ID;
+    const redirect_uri = process.env.NEXT_PUBLIC_REDIRECT_URI;
+
+    const url = `https://auth.mercadolibre.com.ar/authorization?response_type=code&client_id=${client_id}&redirect_uri=${redirect_uri}`;
+
+    window.location.href = url;
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
+    <div className="flex flex-col items-center justify-center gap-4">
+      <button onClick={handleLogin}>Conectar MercadoLibre</button>
+
       <input
         value={query}
-        onChange={(e) => { setQuery(e.target.value) }}
-        type="text"
-        placeholder="Buscar" />
-      <button onClick={()=>handleSearch()}>Buscar</button>
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Buscar"
+      />
+
+      <button onClick={handleSearch}>Buscar</button>
+
+      <div>
+        {results.map((item, idx) => (
+          <div key={idx}>
+            {item.title}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
