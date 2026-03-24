@@ -145,7 +145,7 @@ export default function Home() {
 
     try {
       const searchResponse = await fetch(
-        `/api/ml/search?q=${encodeURIComponent(normalizedQuery)}&limit=50`
+        `/api/ml/search?q=${encodeURIComponent(normalizedQuery)}&limit=100`
       );
       const searchData = await searchResponse.json().catch(() => null);
 
@@ -190,7 +190,20 @@ export default function Home() {
 
     void startLogin();
   };
+  const priceList: number[] = []
 
+
+  for (const result of results) {
+    const amount = result.sale_price?.amount;
+
+    if (typeof amount === "number") {
+      priceList.push(amount);
+    }
+  }
+
+
+  const priceSum = priceList.reduce((acc, value) => acc + value, 0);
+  const averagePrice = priceList.length > 0 ? priceSum / priceList.length : null
   return (
     <div className="flex flex-col items-center justify-center gap-4">
       <button onClick={handleLogin}>Conectar MercadoLibre</button>
@@ -216,6 +229,7 @@ export default function Home() {
       </div>
 
       <div className="grid w-full max-w-6xl grid-cols-1 gap-4 px-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {averagePrice}
         {results.map((item) => {
           const imageUrl = item.pictures?.[0]?.url;
           const description = item.short_description?.content?.trim();
