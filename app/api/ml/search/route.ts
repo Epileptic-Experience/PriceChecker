@@ -27,6 +27,8 @@ type ProductDetailResponse = {
   id?: string;
   buy_box_winner?: {
     item_id?: string;
+    price?: number;
+    currency_id?: string;
   } | null;
   message?: string;
   error?: string;
@@ -63,10 +65,23 @@ type SearchResult = {
   resolved_item_id?: string;
 };
 
+type ProductResolution = {
+  itemId: string | null;
+  error: string | null;
+  winnerPrice: number | null;
+  winnerCurrency: string | null;
+};
+
+type FallbackPrice = {
+  amount: number;
+  currencyId: string;
+  source: "buy_box_winner" | "product_page";
+};
+
 const DEFAULT_SITE_ID = "MLA";
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 50;
-const DEFAULT_CONTEXT = "channel_marketplace,buyer_loyalty_3";
+const DEFAULT_CONTEXT = "channel_marketplace";
 const DEFAULT_DOMAIN_ID = process.env.ML_SEARCH_DEFAULT_DOMAIN_ID || "MLA-CELLPHONES";
 const ITEM_ID_PATTERN = /^[A-Z]{3}\d{9,}$/;
 const PRODUCT_ID_PATTERN = /^[A-Z]{3}\d{7,}$/;
@@ -96,7 +111,26 @@ function readString(value: unknown) {
 }
 
 function readNumber(value: unknown) {
-  return typeof value === "number" ? value : null;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readAmount(value: unknown) {
+  const asNumber = readNumber(value);
+  if (asNumber !== null) {
+    return asNumber;
+  }
+
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().replace(/\./g, "").replace(/,/g, ".");
+  if (!normalized) {
+    return null;
+  }
+
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function readCause(cause: unknown) {
@@ -136,7 +170,149 @@ function buildSalePriceError(data: MercadoLibreSalePrice | null, status: number)
   return `HTTP ${status}: ${details.join(" - ")}`;
 }
 
-async function resolveProductToItemId(productId: string, accessToken: string) {
+function readPriceFromOffers(offers: unknown): { amount: number; currencyId: string } | null {
+  if (Array.isArray(offers)) {
+    for (const offer of offers) {
+      const found = readPriceFromOffers(offer);
+      if (found) {
+        return found;
+      }
+    }
+    return null;
+  }
+
+  if (typeof offers !== "object" || offers === null) {
+    return null;
+  }
+
+  const entry = offers as Record<string, unknown>;
+  const amount = readAmount(entry.price) ?? readAmount(entry.lowPrice) ?? readAmount(entry.highPrice);
+
+  if (amount === null) {
+    return null;
+  }
+
+  const currencyId = readString(entry.priceCurrency) ?? readString(entry.currency) ?? "ARS";
+
+  return {
+    amount,
+    currencyId,
+  };
+}
+
+function readPriceFromJsonLdNode(node: unknown): { amount: number; currencyId: string } | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = readPriceFromJsonLdNode(child);
+      if (found) {
+        return found;
+      }
+    }
+    return null;
+  }
+
+  if (typeof node !== "object" || node === null) {
+    return null;
+  }
+
+  const objectNode = node as Record<string, unknown>;
+
+  const fromOffers = readPriceFromOffers(objectNode.offers);
+  if (fromOffers) {
+    return fromOffers;
+  }
+
+  const fromAggregate = readPriceFromOffers(objectNode.aggregateOffer);
+  if (fromAggregate) {
+    return fromAggregate;
+  }
+
+  const graph = objectNode["@graph"];
+  if (Array.isArray(graph)) {
+    const fromGraph = readPriceFromJsonLdNode(graph);
+    if (fromGraph) {
+      return fromGraph;
+    }
+  }
+
+  return null;
+}
+
+function readPriceFromProductHtml(html: string): { amount: number; currencyId: string } | null {
+  const scriptRegex = /<script type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi;
+
+  for (const match of html.matchAll(scriptRegex)) {
+    const raw = match[1]?.trim();
+    if (!raw) {
+      continue;
+    }
+
+    const normalized = raw.replace(/\\u002F/g, "/");
+
+    try {
+      const parsed = JSON.parse(normalized) as unknown;
+      const found = readPriceFromJsonLdNode(parsed);
+      if (found) {
+        return found;
+      }
+    } catch {
+      // Ignore malformed json-ld blocks.
+    }
+  }
+
+  return null;
+}
+
+async function fetchProductPagePrice(productId: string) {
+  const url = `https://www.mercadolibre.com.ar/p/${productId}`;
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "es-AR,es;q=0.9",
+        "Upgrade-Insecure-Requests": "1",
+      },
+    });
+
+    if (!response.ok) {
+      return {
+        amount: null,
+        currencyId: null,
+        error: `No se pudo leer la pagina del producto (HTTP ${response.status}).`,
+      };
+    }
+
+    const html = await response.text();
+    const extracted = readPriceFromProductHtml(html);
+
+    if (!extracted) {
+      return {
+        amount: null,
+        currencyId: null,
+        error: "No se pudo extraer precio desde la pagina del producto.",
+      };
+    }
+
+    return {
+      amount: extracted.amount,
+      currencyId: extracted.currencyId,
+      error: null,
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+
+    return {
+      amount: null,
+      currencyId: null,
+      error: `Error al consultar pagina de producto: ${message}`,
+    };
+  }
+}
+
+async function resolveProductToItemId(productId: string, accessToken: string): Promise<ProductResolution> {
   const url = new URL(`https://api.mercadolibre.com/products/${productId}`);
 
   const response = await fetch(url, {
@@ -146,6 +322,8 @@ async function resolveProductToItemId(productId: string, accessToken: string) {
   });
 
   const data = (await response.json().catch(() => null)) as ProductDetailResponse | null;
+  const winnerPrice = readNumber(data?.buy_box_winner?.price);
+  const winnerCurrency = readString(data?.buy_box_winner?.currency_id);
 
   if (!response.ok) {
     return {
@@ -154,6 +332,8 @@ async function resolveProductToItemId(productId: string, accessToken: string) {
         typeof data?.message === "string"
           ? `No se pudo resolver producto (${response.status}): ${data.message}`
           : `No se pudo resolver producto (HTTP ${response.status})`,
+      winnerPrice,
+      winnerCurrency,
     };
   }
 
@@ -163,12 +343,16 @@ async function resolveProductToItemId(productId: string, accessToken: string) {
     return {
       itemId: null,
       error: "El producto no tiene buy_box_winner con item_id.",
+      winnerPrice,
+      winnerCurrency,
     };
   }
 
   return {
     itemId,
     error: null,
+    winnerPrice,
+    winnerCurrency,
   };
 }
 
@@ -196,6 +380,18 @@ async function mapWithConcurrency<T, R>(values: T[], limit: number, worker: (val
 
   await Promise.all(runners);
   return results;
+}
+
+function readFallbackFromWinner(winnerPrice: number | null, winnerCurrency: string | null): FallbackPrice | null {
+  if (winnerPrice === null) {
+    return null;
+  }
+
+  return {
+    amount: winnerPrice,
+    currencyId: winnerCurrency || "ARS",
+    source: "buy_box_winner",
+  };
 }
 
 export async function GET(request: Request) {
@@ -348,13 +544,68 @@ export async function GET(request: Request) {
 
     const enrichedResults = await mapWithConcurrency(baseResults, 8, async (item) => {
       let finalItemId: string | null = null;
+      let winnerPrice: number | null = null;
+      let winnerCurrency: string | null = null;
 
       if (ITEM_ID_PATTERN.test(item.id)) {
         finalItemId = item.id;
       } else if (PRODUCT_ID_PATTERN.test(item.id)) {
         const resolved = await resolveProductToItemId(item.id, accessToken);
+        winnerPrice = resolved.winnerPrice;
+        winnerCurrency = resolved.winnerCurrency;
 
         if (!resolved.itemId) {
+          const winnerFallback = readFallbackFromWinner(winnerPrice, winnerCurrency);
+
+          if (winnerFallback) {
+            logMlStep({
+              enabled: debugEnabled,
+              route: "ml/search",
+              traceId,
+              step: "item_price_fallback_used",
+              details: {
+                productId: item.id,
+                source: winnerFallback.source,
+                reason: resolved.error,
+              },
+            });
+
+            return {
+              ...item,
+              sale_price: {
+                amount: winnerFallback.amount,
+                regular_amount: null,
+                currency_id: winnerFallback.currencyId,
+                error: null,
+              },
+            };
+          }
+
+          const pageFallback = await fetchProductPagePrice(item.id);
+          if (pageFallback.amount !== null) {
+            logMlStep({
+              enabled: debugEnabled,
+              route: "ml/search",
+              traceId,
+              step: "item_price_fallback_used",
+              details: {
+                productId: item.id,
+                source: "product_page",
+                reason: resolved.error,
+              },
+            });
+
+            return {
+              ...item,
+              sale_price: {
+                amount: pageFallback.amount,
+                regular_amount: null,
+                currency_id: pageFallback.currencyId || "ARS",
+                error: null,
+              },
+            };
+          }
+
           logMlStep({
             enabled: debugEnabled,
             route: "ml/search",
@@ -362,7 +613,8 @@ export async function GET(request: Request) {
             step: "product_resolution_failed",
             details: {
               productId: item.id,
-              error: resolved.error,
+              resolutionError: resolved.error,
+              pageFallbackError: pageFallback.error,
             },
           });
 
@@ -372,7 +624,7 @@ export async function GET(request: Request) {
               amount: null,
               regular_amount: null,
               currency_id: null,
-              error: resolved.error ?? "No se pudo resolver item_id desde product_id.",
+              error: resolved.error ?? pageFallback.error ?? "No se pudo resolver item_id desde product_id.",
             },
           };
         }
@@ -404,7 +656,61 @@ export async function GET(request: Request) {
         | null;
 
       if (!salePriceResponse.ok) {
-        const error = buildSalePriceError(salePriceData, salePriceResponse.status);
+        const salePriceError = buildSalePriceError(salePriceData, salePriceResponse.status);
+
+        const winnerFallback = readFallbackFromWinner(winnerPrice, winnerCurrency);
+        if (winnerFallback) {
+          logMlStep({
+            enabled: debugEnabled,
+            route: "ml/search",
+            traceId,
+            step: "item_price_fallback_used",
+            details: {
+              productId: item.id,
+              itemId: finalItemId,
+              source: winnerFallback.source,
+              reason: salePriceError,
+            },
+          });
+
+          return {
+            ...item,
+            resolved_item_id: finalItemId,
+            sale_price: {
+              amount: winnerFallback.amount,
+              regular_amount: null,
+              currency_id: winnerFallback.currencyId,
+              error: null,
+            },
+          };
+        }
+
+        const pageFallback = await fetchProductPagePrice(item.id);
+        if (pageFallback.amount !== null) {
+          logMlStep({
+            enabled: debugEnabled,
+            route: "ml/search",
+            traceId,
+            step: "item_price_fallback_used",
+            details: {
+              productId: item.id,
+              itemId: finalItemId,
+              source: "product_page",
+              reason: salePriceError,
+            },
+          });
+
+          return {
+            ...item,
+            resolved_item_id: finalItemId,
+            sale_price: {
+              amount: pageFallback.amount,
+              regular_amount: null,
+              currency_id: pageFallback.currencyId || "ARS",
+              error: null,
+            },
+          };
+        }
 
         logMlStep({
           enabled: debugEnabled,
@@ -414,8 +720,8 @@ export async function GET(request: Request) {
           details: {
             productId: item.id,
             itemId: finalItemId,
-            status: salePriceResponse.status,
-            error,
+            salePriceError,
+            pageFallbackError: pageFallback.error,
           },
         });
 
@@ -426,7 +732,77 @@ export async function GET(request: Request) {
             amount: null,
             regular_amount: null,
             currency_id: null,
-            error,
+            error: salePriceError,
+          },
+        };
+      }
+
+      const apiAmount = readNumber(salePriceData?.amount);
+      const apiCurrency = readString(salePriceData?.currency_id);
+
+      if (apiAmount !== null) {
+        return {
+          ...item,
+          resolved_item_id: finalItemId,
+          sale_price: {
+            amount: apiAmount,
+            regular_amount: readNumber(salePriceData?.regular_amount),
+            currency_id: apiCurrency,
+            error: null,
+          },
+        };
+      }
+
+      const winnerFallback = readFallbackFromWinner(winnerPrice, winnerCurrency);
+      if (winnerFallback) {
+        logMlStep({
+          enabled: debugEnabled,
+          route: "ml/search",
+          traceId,
+          step: "item_price_fallback_used",
+          details: {
+            productId: item.id,
+            itemId: finalItemId,
+            source: winnerFallback.source,
+            reason: "sale_price_amount_null",
+          },
+        });
+
+        return {
+          ...item,
+          resolved_item_id: finalItemId,
+          sale_price: {
+            amount: winnerFallback.amount,
+            regular_amount: null,
+            currency_id: winnerFallback.currencyId,
+            error: null,
+          },
+        };
+      }
+
+      const pageFallback = await fetchProductPagePrice(item.id);
+      if (pageFallback.amount !== null) {
+        logMlStep({
+          enabled: debugEnabled,
+          route: "ml/search",
+          traceId,
+          step: "item_price_fallback_used",
+          details: {
+            productId: item.id,
+            itemId: finalItemId,
+            source: "product_page",
+            reason: "sale_price_amount_null",
+          },
+        });
+
+        return {
+          ...item,
+          resolved_item_id: finalItemId,
+          sale_price: {
+            amount: pageFallback.amount,
+            regular_amount: null,
+            currency_id: pageFallback.currencyId || "ARS",
+            error: null,
           },
         };
       }
@@ -435,10 +811,10 @@ export async function GET(request: Request) {
         ...item,
         resolved_item_id: finalItemId,
         sale_price: {
-          amount: readNumber(salePriceData?.amount),
-          regular_amount: readNumber(salePriceData?.regular_amount),
-          currency_id: readString(salePriceData?.currency_id),
-          error: null,
+          amount: null,
+          regular_amount: null,
+          currency_id: apiCurrency,
+          error: "sale_price no devolvio monto para el item.",
         },
       };
     });
