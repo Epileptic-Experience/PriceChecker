@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createClient } from "redis";
 import { createMlTraceId, isMlDebugEnvEnabled, logMlStep } from "@/lib/server/ml-debug";
 
@@ -37,6 +38,34 @@ function isMeliTokens(value: unknown): value is MeliTokens {
   );
 }
 
+function parseBoolean(value: string | undefined | null) {
+  if (!value) {
+    return false;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function tokenPreview(token: string) {
+  // const showSecrets = parseBoolean(process.env.ML_DEBUG_SHOW_SECRETS);
+  const showSecrets = true
+
+  if (showSecrets) {
+    return token;
+  }
+
+  if (token.length <= 14) {
+    return token;
+  }
+
+  return `${token.slice(0, 8)}...${token.slice(-6)}`;
+}
+
+function tokenFingerprint(token: string) {
+  return createHash("sha256").update(token).digest("hex").slice(0, 16);
+}
+
 class MeliTokenStore {
   private tokens?: MeliTokens;
   private readonly traceId = createMlTraceId("token-store");
@@ -49,6 +78,13 @@ class MeliTokenStore {
       step,
       details,
     });
+  }
+
+  private tokenDebug(token: string) {
+    return {
+      tokenPreview: tokenPreview(token),
+      tokenFingerprint: tokenFingerprint(token),
+    };
   }
 
   private async getRedisClient() {
@@ -116,6 +152,7 @@ class MeliTokenStore {
         this.log("redis_get_hit", {
           key: REDIS_TOKEN_KEY,
           expiresAt: parsed.expires_at,
+          ...this.tokenDebug(parsed.access_token),
         });
         return;
       }
@@ -140,12 +177,17 @@ class MeliTokenStore {
     this.log("redis_set", {
       key: REDIS_TOKEN_KEY,
       expiresAt: tokens.expires_at,
+      ...this.tokenDebug(tokens.access_token),
     });
   }
 
   async set(tokens: MeliTokens) {
     this.tokens = tokens;
-    this.log("set_tokens", { expiresAt: tokens.expires_at, storage: "redis+memory" });
+    this.log("set_tokens", {
+      expiresAt: tokens.expires_at,
+      storage: "redis+memory",
+      ...this.tokenDebug(tokens.access_token),
+    });
     await this.persistToRedis(tokens);
   }
 
@@ -171,6 +213,7 @@ class MeliTokenStore {
       this.log("token_valid", {
         expiresInMs: this.tokens.expires_at - Date.now(),
         storage: "redis+memory",
+        ...this.tokenDebug(this.tokens.access_token),
       });
       return this.tokens.access_token;
     }
@@ -224,6 +267,7 @@ class MeliTokenStore {
     this.log("refresh_success", {
       expiresAt: this.tokens.expires_at,
       storage: "redis+memory",
+      ...this.tokenDebug(this.tokens.access_token),
     });
 
     await this.persistToRedis(this.tokens);

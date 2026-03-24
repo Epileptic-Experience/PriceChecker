@@ -26,6 +26,7 @@ type SiteSearchResponse = {
   results?: SiteSearchRawResult[];
   message?: string;
   error?: string;
+  cause?: unknown;
 };
 
 function readMeliError(data: unknown, status: number) {
@@ -38,6 +39,14 @@ function readMeliError(data: unknown, status: number) {
 
   const details = [error, message].filter(Boolean).join(" - ");
   return details ? `HTTP ${status}: ${details}` : `MercadoLibre request failed (HTTP ${status}).`;
+}
+
+function readErrorDetails(data: SiteSearchResponse | null) {
+  return {
+    meliError: typeof data?.error === "string" ? data.error : null,
+    meliMessage: typeof data?.message === "string" ? data.message : null,
+    meliCause: data?.cause ?? null,
+  };
 }
 
 export async function GET(request: Request) {
@@ -108,12 +117,13 @@ export async function GET(request: Request) {
         status: response.status,
         ok: response.ok,
         rawResults: Array.isArray(data?.results) ? data.results.length : 0,
+        ...readErrorDetails(data),
       },
     });
 
     if (!response.ok) {
       return Response.json(
-        { error: readMeliError(data, response.status) },
+        { error: readMeliError(data, response.status), details: readErrorDetails(data) },
         { status: response.status }
       );
     }
