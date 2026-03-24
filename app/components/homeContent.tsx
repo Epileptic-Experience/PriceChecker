@@ -25,14 +25,6 @@ type SearchResult = {
   };
 };
 
-type SalePriceResult = {
-  item_id: string;
-  amount: number | null;
-  regular_amount: number | null;
-  currency_id: string | null;
-  error: string | null;
-};
-
 const PKCE_VERIFIER_KEY = "meli_pkce_verifier";
 const OAUTH_STATE_KEY = "meli_oauth_state";
 
@@ -152,8 +144,10 @@ export default function Home() {
     setIsSearching(true);
 
     try {
-      const searchResponse = await fetch(`/api/ml/search?q=${encodeURIComponent(normalizedQuery)}`);
-      const searchData = await searchResponse.json();
+      const searchResponse = await fetch(
+        `/api/ml/search?q=${encodeURIComponent(normalizedQuery)}&limit=50`
+      );
+      const searchData = await searchResponse.json().catch(() => null);
 
       if (!searchResponse.ok) {
         console.error("Fallo la busqueda", searchData);
@@ -162,53 +156,7 @@ export default function Home() {
       }
 
       const searchResults = Array.isArray(searchData) ? (searchData as SearchResult[]) : [];
-
-      if (searchResults.length === 0) {
-        setResults([]);
-        return;
-      }
-
-      const salePriceResponse = await fetch("/api/ml/sale-price", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          item_ids: searchResults.map((item) => item.id),
-        }),
-      });
-
-      if (!salePriceResponse.ok) {
-        const errorPayload = await salePriceResponse.json().catch(() => null);
-        console.error("Fallo la consulta de precios", errorPayload);
-        setResults(searchResults);
-        return;
-      }
-
-      const salePriceData = (await salePriceResponse.json().catch(() => null)) as
-        | { results?: SalePriceResult[] }
-        | null;
-
-      const salePriceResults = Array.isArray(salePriceData?.results) ? salePriceData.results : [];
-      const pricesByItemId = new Map(salePriceResults.map((price) => [price.item_id, price]));
-
-      const mergedResults = searchResults.map((item) => {
-        const itemPrice = pricesByItemId.get(item.id);
-
-        return {
-          ...item,
-          sale_price: itemPrice
-            ? {
-                amount: itemPrice.amount,
-                regular_amount: itemPrice.regular_amount,
-                currency_id: itemPrice.currency_id,
-                error: itemPrice.error,
-              }
-            : undefined,
-        };
-      });
-
-      setResults(mergedResults);
+      setResults(searchResults);
     } catch (error: unknown) {
       console.error("Error inesperado en la busqueda", error);
       setResults([]);
