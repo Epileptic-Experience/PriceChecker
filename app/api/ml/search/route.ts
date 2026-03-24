@@ -10,6 +10,7 @@ export async function GET(request: Request) {
 
   try {
     const accessToken = await getMeliTokenStore().getValidAccessToken();
+    console.log("accessToken", accessToken)
     const headers = {
       headers: {
         Authorization: `Bearer ${accessToken}`,
