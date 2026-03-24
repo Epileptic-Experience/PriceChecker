@@ -141,7 +141,7 @@ export async function POST(request: Request) {
       );
     }
 
-    tokenStore.set({
+    await tokenStore.set({
       access_token: accessToken,
       refresh_token: refreshToken,
       expires_at: Date.now() + expiresIn * 1000,
