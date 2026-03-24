@@ -127,7 +127,7 @@ export async function POST(request: Request) {
 
   try {
     const accessToken = await getMeliTokenStore().getValidAccessToken();
-
+    console.log("ACCESSTOKEN:", accessToken)
     const results = await Promise.all(
       itemIds.map(async (itemId): Promise<SalePriceResult> => {
         if (!ITEM_ID_PATTERN.test(itemId)) {
