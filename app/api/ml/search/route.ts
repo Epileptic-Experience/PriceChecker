@@ -653,6 +653,32 @@ export async function GET(request: Request) {
       if (ITEM_ID_PATTERN.test(item.id)) {
         finalItemId = item.id;
       } else if (PRODUCT_ID_PATTERN.test(item.id)) {
+        const pageFirst = await fetchProductPagePrice(item.id);
+
+        if (pageFirst.amount !== null) {
+          logMlStep({
+            enabled: debugEnabled,
+            route: "ml/search",
+            traceId,
+            step: "item_price_fallback_used",
+            details: {
+              productId: item.id,
+              source: "product_page",
+              reason: "scrape_first_strategy",
+            },
+          });
+
+          return {
+            ...item,
+            sale_price: {
+              amount: pageFirst.amount,
+              regular_amount: null,
+              currency_id: pageFirst.currencyId || "ARS",
+              error: null,
+            },
+          };
+        }
+
         const resolved = await resolveProductToItemId(item.id, accessToken);
         winnerPrice = resolved.winnerPrice;
         winnerCurrency = resolved.winnerCurrency;
@@ -671,7 +697,7 @@ export async function GET(request: Request) {
               details: {
                 productId: item.id,
                 source: apiFallback.source,
-                reason: resolved.error,
+                reason: `${resolved.error ?? "unknown"} | scrape_first_failed: ${pageFirst.error ?? "unknown"}`,
               },
             });
 
@@ -686,31 +712,6 @@ export async function GET(request: Request) {
             };
           }
 
-          const pageFallback = await fetchProductPagePrice(item.id);
-          if (pageFallback.amount !== null) {
-            logMlStep({
-              enabled: debugEnabled,
-              route: "ml/search",
-              traceId,
-              step: "item_price_fallback_used",
-              details: {
-                productId: item.id,
-                source: "product_page",
-                reason: resolved.error,
-              },
-            });
-
-            return {
-              ...item,
-              sale_price: {
-                amount: pageFallback.amount,
-                regular_amount: null,
-                currency_id: pageFallback.currencyId || "ARS",
-                error: null,
-              },
-            };
-          }
-
           logMlStep({
             enabled: debugEnabled,
             route: "ml/search",
@@ -719,7 +720,7 @@ export async function GET(request: Request) {
             details: {
               productId: item.id,
               resolutionError: resolved.error,
-              pageFallbackError: pageFallback.error,
+              pageFallbackError: pageFirst.error,
             },
           });
 
@@ -729,7 +730,10 @@ export async function GET(request: Request) {
               amount: null,
               regular_amount: null,
               currency_id: null,
-              error: resolved.error ?? pageFallback.error ?? "No se pudo resolver item_id desde product_id.",
+              error:
+                resolved.error ??
+                pageFirst.error ??
+                "No se pudo resolver item_id desde product_id ni extraer precio por scrape.",
             },
           };
         }
