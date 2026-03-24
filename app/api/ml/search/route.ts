@@ -100,8 +100,8 @@ type FallbackPrice = {
 };
 
 const DEFAULT_SITE_ID = "MLA";
-const DEFAULT_LIMIT = 50;
-const MAX_LIMIT = 50;
+const DEFAULT_LIMIT = 100;
+const MAX_LIMIT = 100;
 const DEFAULT_CONTEXT = "channel_marketplace";
 const DEFAULT_DOMAIN_ID = process.env.ML_SEARCH_DEFAULT_DOMAIN_ID || "MLA-CELLPHONES";
 const ITEM_ID_PATTERN = /^[A-Z]{3}\d{9,}$/;
@@ -510,6 +510,8 @@ export async function GET(request: Request) {
   const limit = Number.isNaN(requestedLimit)
     ? DEFAULT_LIMIT
     : Math.max(1, Math.min(MAX_LIMIT, requestedLimit));
+  const searchPageSize = Math.min(MAX_LIMIT, Math.max(20, limit));
+  const maxPages = 15;
 
   logMlStep({
     enabled: debugEnabled,
@@ -523,6 +525,8 @@ export async function GET(request: Request) {
       limit,
       includePrices,
       context,
+      searchPageSize,
+      maxPages,
     },
   });
 
@@ -537,70 +541,8 @@ export async function GET(request: Request) {
     return Response.json({ error: "Missing query" }, { status: 400 });
   }
 
-  try {
-    const accessToken = await getMeliTokenStore().getValidAccessToken();
-
-    logMlStep({
-      enabled: debugEnabled,
-      route: "ml/search",
-      traceId,
-      step: "token_ready",
-      details: { hasToken: true },
-    });
-
-    const url = new URL("https://api.mercadolibre.com/products/search");
-    url.searchParams.set("q", q);
-    url.searchParams.set("status", "active");
-    url.searchParams.set("site_id", siteId);
-    url.searchParams.set("limit", String(limit));
-
-    if (domainId) {
-      url.searchParams.set("domain_id", domainId);
-    }
-
-    logMlStep({
-      enabled: debugEnabled,
-      route: "ml/search",
-      traceId,
-      step: "meli_request_started",
-      details: {
-        url: url.toString(),
-        endpoint: "products/search",
-      },
-    });
-
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
-
-    const data = (await response.json().catch(() => null)) as ProductSearchResponse | null;
-
-    logMlStep({
-      enabled: debugEnabled,
-      route: "ml/search",
-      traceId,
-      step: "meli_request_finished",
-      details: {
-        status: response.status,
-        ok: response.ok,
-        rawResults: Array.isArray(data?.results) ? data.results.length : 0,
-        endpoint: "products/search",
-        ...readErrorDetails(data),
-      },
-    });
-
-    if (!response.ok) {
-      return Response.json(
-        { error: readMeliError(data, response.status), details: readErrorDetails(data) },
-        { status: response.status }
-      );
-    }
-
-    const rawResults = Array.isArray(data?.results) ? data.results : [];
-
-    const baseResults: SearchResult[] = rawResults
+  const mapRawResults = (rawResults: ProductSearchRawResult[]): SearchResult[] => {
+    return rawResults
       .filter((item): item is ProductSearchRawResult & { id: string } => typeof item.id === "string")
       .map((item) => ({
         id: item.id,
@@ -622,28 +564,108 @@ export async function GET(request: Request) {
               .slice(0, 1)
           : undefined,
       }));
+  };
 
-    if (!includePrices || baseResults.length === 0) {
-      logMlStep({
-        enabled: debugEnabled,
-        route: "ml/search",
-        traceId,
-        step: "response_ready",
-        details: { results: baseResults.length, priced: false },
-      });
-
-      return Response.json(baseResults);
+  const readPaging = (data: ProductSearchResponse | null) => {
+    if (!data || typeof data !== "object") {
+      return { total: null, offset: null, limit: null };
     }
+
+    const paging = "paging" in data && typeof (data as { paging?: unknown }).paging === "object"
+      ? ((data as { paging?: Record<string, unknown> }).paging ?? null)
+      : null;
+
+    if (!paging) {
+      return { total: null, offset: null, limit: null };
+    }
+
+    const total = typeof paging.total === "number" ? paging.total : null;
+    const offset = typeof paging.offset === "number" ? paging.offset : null;
+    const pageLimit = typeof paging.limit === "number" ? paging.limit : null;
+
+    return { total, offset, limit: pageLimit };
+  };
+
+  try {
+    const accessToken = await getMeliTokenStore().getValidAccessToken();
 
     logMlStep({
       enabled: debugEnabled,
       route: "ml/search",
       traceId,
-      step: "price_enrichment_started",
-      details: { total: baseResults.length },
+      step: "token_ready",
+      details: { hasToken: true },
     });
 
-    const enrichedResults = await mapWithConcurrency(baseResults, 8, async (item) => {
+    const fetchSearchPage = async (offset: number, pageLimit: number) => {
+      const url = new URL("https://api.mercadolibre.com/products/search");
+      url.searchParams.set("q", q);
+      url.searchParams.set("status", "active");
+      url.searchParams.set("site_id", siteId);
+      url.searchParams.set("limit", String(pageLimit));
+
+      if (offset > 0) {
+        url.searchParams.set("offset", String(offset));
+      }
+
+      if (domainId) {
+        url.searchParams.set("domain_id", domainId);
+      }
+
+      logMlStep({
+        enabled: debugEnabled,
+        route: "ml/search",
+        traceId,
+        step: "meli_request_started",
+        details: {
+          url: url.toString(),
+          endpoint: "products/search",
+          offset,
+          pageLimit,
+        },
+      });
+
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      const data = (await response.json().catch(() => null)) as ProductSearchResponse | null;
+      const rawResults = Array.isArray(data?.results) ? data.results : [];
+      const paging = readPaging(data);
+      const nextOffset =
+        paging.offset !== null && paging.limit !== null ? paging.offset + paging.limit : offset + rawResults.length;
+
+      logMlStep({
+        enabled: debugEnabled,
+        route: "ml/search",
+        traceId,
+        step: "meli_request_finished",
+        details: {
+          status: response.status,
+          ok: response.ok,
+          rawResults: rawResults.length,
+          endpoint: "products/search",
+          offset,
+          nextOffset,
+          pagingTotal: paging.total,
+          pagingOffset: paging.offset,
+          pagingLimit: paging.limit,
+          ...readErrorDetails(data),
+        },
+      });
+
+      return {
+        response,
+        data,
+        rawResults,
+        paging,
+        nextOffset,
+      };
+    };
+
+    const enrichResult = async (item: SearchResult): Promise<SearchResult> => {
       let finalItemId: string | null = null;
       let winnerPrice: number | null = null;
       let winnerCurrency: string | null = null;
@@ -926,9 +948,127 @@ export async function GET(request: Request) {
           error: "sale_price no devolvio monto para el item.",
         },
       };
+    };
+
+    if (!includePrices) {
+      const firstPage = await fetchSearchPage(0, limit);
+
+      if (!firstPage.response.ok) {
+        return Response.json(
+          {
+            error: readMeliError(firstPage.data, firstPage.response.status),
+            details: readErrorDetails(firstPage.data),
+          },
+          { status: firstPage.response.status }
+        );
+      }
+
+      const mapped = mapRawResults(firstPage.rawResults).slice(0, limit);
+
+      logMlStep({
+        enabled: debugEnabled,
+        route: "ml/search",
+        traceId,
+        step: "response_ready",
+        details: { results: mapped.length, priced: false },
+      });
+
+      return Response.json(mapped);
+    }
+
+    logMlStep({
+      enabled: debugEnabled,
+      route: "ml/search",
+      traceId,
+      step: "price_enrichment_started",
+      details: { target: limit, mode: "priced_only" },
     });
 
-    const withPrice = enrichedResults.filter((item) => typeof item.sale_price?.amount === "number").length;
+    const seenIds = new Set<string>();
+    const pricedResults: SearchResult[] = [];
+    let offset = 0;
+    let pagesScanned = 0;
+    let exhausted = false;
+    let enrichedCount = 0;
+    let noPriceDiscarded = 0;
+
+    while (pricedResults.length < limit && pagesScanned < maxPages && !exhausted) {
+      const page = await fetchSearchPage(offset, searchPageSize);
+      pagesScanned += 1;
+
+      if (!page.response.ok) {
+        if (pagesScanned === 1) {
+          return Response.json(
+            {
+              error: readMeliError(page.data, page.response.status),
+              details: readErrorDetails(page.data),
+            },
+            { status: page.response.status }
+          );
+        }
+
+        logMlStep({
+          enabled: debugEnabled,
+          route: "ml/search",
+          traceId,
+          step: "search_page_break",
+          details: {
+            reason: "non_first_page_error",
+            status: page.response.status,
+            scannedPages: pagesScanned,
+            collectedWithPrice: pricedResults.length,
+          },
+        });
+        break;
+      }
+
+      const mapped = mapRawResults(page.rawResults);
+      const uniqueMapped = mapped.filter((item) => {
+        if (seenIds.has(item.id)) {
+          return false;
+        }
+
+        seenIds.add(item.id);
+        return true;
+      });
+
+      if (uniqueMapped.length > 0) {
+        const enrichedBatch = await mapWithConcurrency(uniqueMapped, 8, enrichResult);
+        const pricedBatch = enrichedBatch.filter(
+          (item) => typeof item.sale_price?.amount === "number"
+        );
+
+        enrichedCount += enrichedBatch.length;
+        noPriceDiscarded += enrichedBatch.length - pricedBatch.length;
+
+        const remaining = limit - pricedResults.length;
+        pricedResults.push(...pricedBatch.slice(0, remaining));
+
+        logMlStep({
+          enabled: debugEnabled,
+          route: "ml/search",
+          traceId,
+          step: "search_page_collected",
+          details: {
+            scannedPages: pagesScanned,
+            fetchedInPage: page.rawResults.length,
+            uniqueInPage: uniqueMapped.length,
+            pricedInPage: pricedBatch.length,
+            totalPricedCollected: pricedResults.length,
+            totalDiscardedNoPrice: noPriceDiscarded,
+            totalEnriched: enrichedCount,
+          },
+        });
+      }
+
+      const pagingLimit = page.paging.limit ?? searchPageSize;
+      const reachedEndByCount = page.rawResults.length < pagingLimit;
+      const reachedEndByTotal =
+        page.paging.total !== null && page.nextOffset >= page.paging.total;
+
+      exhausted = reachedEndByCount || reachedEndByTotal || page.rawResults.length === 0;
+      offset = page.nextOffset;
+    }
 
     logMlStep({
       enabled: debugEnabled,
@@ -936,9 +1076,12 @@ export async function GET(request: Request) {
       traceId,
       step: "price_enrichment_finished",
       details: {
-        total: enrichedResults.length,
-        withPrice,
-        withoutPrice: enrichedResults.length - withPrice,
+        target: limit,
+        pagesScanned,
+        exhausted,
+        withPrice: pricedResults.length,
+        withoutPrice: noPriceDiscarded,
+        enrichedTotal: enrichedCount,
       },
     });
 
@@ -947,10 +1090,14 @@ export async function GET(request: Request) {
       route: "ml/search",
       traceId,
       step: "response_ready",
-      details: { results: enrichedResults.length, priced: true },
+      details: {
+        results: pricedResults.length,
+        priced: true,
+        filteredNoPrice: true,
+      },
     });
 
-    return Response.json(enrichedResults);
+    return Response.json(pricedResults);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
 
