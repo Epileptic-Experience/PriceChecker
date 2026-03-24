@@ -1,4 +1,3 @@
-import axios from "axios";
 import { NextResponse } from "next/server";
 
 declare global {
@@ -23,23 +22,27 @@ export async function POST(request: Request) {
 
 
   try {
-    const response = await axios.post(
-      "https://api.mercadolibre.com/oauth/token",
-      new URLSearchParams({
+    const response = await fetch("https://api.mercadolibre.com/oauth/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
         grant_type: "authorization_code",
         client_id: client_id!,
         client_secret: client_secret!,
         code: code!,
         redirect_uri: redirect_uri!,
       }),
-      {
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-      }
-    );
+    });
 
-    const { access_token, refresh_token, expires_in } = response.data;
+    const data = await response.json();
+
+    if (!response.ok) {
+      return Response.json({ error: data }, { status: response.status });
+    }
+
+    const { access_token, refresh_token, expires_in } = data;
 
     const myRefreshToken = refresh_token;
     globalThis.meliTokens = {
@@ -52,11 +55,9 @@ export async function POST(request: Request) {
     console.log("Access Token:", access_token);
     console.log("Refresh Token:", myRefreshToken);
 
-    return NextResponse.redirect(new URL('/'), 200);
-  } catch (error: any) {
-    return Response.json(
-      { error: error.response?.data || error.message },
-      { status: 500 }
-    );
+    return NextResponse.redirect(new URL("/", request.url));
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return Response.json({ error: message }, { status: 500 });
   }
 }
