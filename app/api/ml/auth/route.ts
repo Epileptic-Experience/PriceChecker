@@ -14,9 +14,12 @@ export async function POST(request: Request) {
   const client_secret = process.env.CLIENT_SECRET;
   const redirect_uri = process.env.NEXT_PUBLIC_REDIRECT_URI;
 
-  // Obtener el "code" que viene del redirect de MercadoLibre
-  const { searchParams } = new URL(request.url);
-  const code = searchParams.get("code");
+  // Obtener el "code" desde el body del request
+  const { code } = await request.json();
+
+  if (!code) {
+    return Response.json({ error: 'Missing "code" in request body' }, { status: 400 });
+  }
 
 
   try {
