@@ -1,10 +1,21 @@
 "use client"
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 type SearchResult = {
   id: string;
-  title: string;
+  name: string;
+  domain_id?: string;
+  catalog_product_id?: string;
+  status?: string;
+  pictures?: Array<{
+    id: string;
+    url: string;
+  }>;
+  short_description?: {
+    content?: string;
+  };
 };
 
 const PKCE_VERIFIER_KEY = "meli_pkce_verifier";
@@ -34,8 +45,8 @@ async function createCodeChallenge(codeVerifier: string) {
 
 
 export default function Home() {
-  const [query, setQuery] = useState<string>("")
-  const [results, setResults] = useState<SearchResult[]>([])
+  const [query, setQuery] = useState<string>("");
+  const [results, setResults] = useState<SearchResult[]>([]);
   const [authError, setAuthError] = useState<string | null>(null);
   const [isAuthorizing, setIsAuthorizing] = useState(false);
   const router = useRouter();
@@ -146,20 +157,75 @@ export default function Home() {
       {isAuthorizing && <p>Autorizando con MercadoLibre...</p>}
       {authError && <p>{authError}</p>}
 
-      <input
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Buscar"
-      />
+      <div className="flex w-full max-w-6xl gap-3 px-4">
+        <input
+          className="flex-1 rounded-md border border-neutral-300 px-4 py-3"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Buscar productos"
+        />
 
-      <button onClick={handleSearch}>Buscar</button>
+        <button
+          className="rounded-md bg-black px-5 py-3 text-white"
+          onClick={handleSearch}
+        >
+          Buscar
+        </button>
+      </div>
 
-      <div>
-        {results.map((item, idx) => (
-          <div key={idx}>
-            {item.title}
-          </div>
-        ))}
+      <div className="grid w-full max-w-6xl grid-cols-1 gap-4 px-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {results.map((item) => {
+          const imageUrl = item.pictures?.[0]?.url;
+          const description = item.short_description?.content?.trim();
+
+          return (
+            <article
+              key={item.id}
+              className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm"
+            >
+              <div className="relative flex aspect-square items-center justify-center bg-neutral-100">
+                {imageUrl ? (
+                  <Image
+                    src={imageUrl}
+                    alt={item.name}
+                    fill
+                    sizes="(max-width: 640px) 100vw, (max-width: 1280px) 50vw, 25vw"
+                    className="object-cover"
+                  />
+                ) : (
+                  <div className="px-6 text-center text-sm text-neutral-500">
+                    Sin imagen
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-3 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <h2 className="line-clamp-2 text-sm font-semibold text-neutral-900">
+                    {item.name}
+                  </h2>
+                  {item.status && (
+                    <span className="rounded-full bg-neutral-100 px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-neutral-600">
+                      {item.status}
+                    </span>
+                  )}
+                </div>
+
+                <div className="space-y-1 text-xs text-neutral-500">
+                  <p>ID: {item.id}</p>
+                  {item.catalog_product_id && <p>Catalogo: {item.catalog_product_id}</p>}
+                  {item.domain_id && <p>Dominio: {item.domain_id}</p>}
+                </div>
+
+                {description && (
+                  <p className="line-clamp-4 text-sm text-neutral-600">
+                    {description}
+                  </p>
+                )}
+              </div>
+            </article>
+          );
+        })}
       </div>
     </div>
   );
