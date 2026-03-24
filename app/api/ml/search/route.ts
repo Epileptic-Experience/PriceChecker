@@ -12,6 +12,10 @@ type ProductSearchResponse = {
   results?: ProductSearchResult[];
 };
 
+function isProductSearchResponse(data: unknown): data is ProductSearchResponse {
+  return typeof data === "object" && data !== null && "results" in data;
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const q = searchParams.get("q")?.trim();
@@ -43,8 +47,7 @@ export async function GET(request: Request) {
           : "MercadoLibre request failed.";
       return Response.json({ error: message }, { status: response.status });
     }
-    console.log(data)
-    return Response.json(data.results ?? []);
+    return Response.json(isProductSearchResponse(data) ? data.results ?? [] : []);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return Response.json({ error: message }, { status: 500 });
