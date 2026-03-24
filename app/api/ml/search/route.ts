@@ -1,5 +1,3 @@
-import { getMeliTokenStore } from "@/lib/server/meli-token-store";
-
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const q = searchParams.get("q");
@@ -9,16 +7,8 @@ export async function GET(request: Request) {
   }
 
   try {
-    const accessToken = await getMeliTokenStore().getValidAccessToken();
-    console.log("accessToken", accessToken)
-    const headers = {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    };
     const response = await fetch(
-      `https://api.mercadolibre.com/sites/MLA/search?q=${encodeURIComponent(q)}`,
-      headers
+      `https://api.mercadolibre.com/sites/MLA/search?q=${encodeURIComponent(q)}`
     );
     const data = await response.json();
 
