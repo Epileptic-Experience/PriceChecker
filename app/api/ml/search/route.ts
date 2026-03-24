@@ -49,6 +49,19 @@ function readErrorDetails(data: SiteSearchResponse | null) {
   };
 }
 
+async function fetchSiteSearch(url: URL, accessToken?: string) {
+  const headers: HeadersInit | undefined = accessToken
+    ? {
+        Authorization: `Bearer ${accessToken}`,
+      }
+    : undefined;
+
+  const response = await fetch(url, { headers });
+  const data = (await response.json().catch(() => null)) as SiteSearchResponse | null;
+
+  return { response, data };
+}
+
 export async function GET(request: Request) {
   const debugEnabled = isMlDebugEnabled(request);
   const traceId = createMlTraceId("search");
@@ -77,15 +90,27 @@ export async function GET(request: Request) {
   }
 
   try {
-    const accessToken = await getMeliTokenStore().getValidAccessToken();
+    let accessToken: string | undefined;
 
-    logMlStep({
-      enabled: debugEnabled,
-      route: "ml/search",
-      traceId,
-      step: "token_ready",
-      details: { hasToken: Boolean(accessToken) },
-    });
+    try {
+      accessToken = await getMeliTokenStore().getValidAccessToken();
+      logMlStep({
+        enabled: debugEnabled,
+        route: "ml/search",
+        traceId,
+        step: "token_ready",
+        details: { hasToken: true },
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      logMlStep({
+        enabled: debugEnabled,
+        route: "ml/search",
+        traceId,
+        step: "token_unavailable",
+        details: { message },
+      });
+    }
 
     const url = new URL("https://api.mercadolibre.com/sites/MLA/search");
     url.searchParams.set("q", q);
@@ -97,16 +122,13 @@ export async function GET(request: Request) {
       route: "ml/search",
       traceId,
       step: "meli_request_started",
-      details: { url: url.toString() },
-    });
-
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
+      details: {
+        url: url.toString(),
+        authMode: accessToken ? "bearer" : "public",
       },
     });
 
-    const data = (await response.json().catch(() => null)) as SiteSearchResponse | null;
+    let { response, data } = await fetchSiteSearch(url, accessToken);
 
     logMlStep({
       enabled: debugEnabled,
@@ -116,10 +138,38 @@ export async function GET(request: Request) {
       details: {
         status: response.status,
         ok: response.ok,
+        authMode: accessToken ? "bearer" : "public",
         rawResults: Array.isArray(data?.results) ? data.results.length : 0,
         ...readErrorDetails(data),
       },
     });
+
+    if (response.status === 403 && accessToken) {
+      logMlStep({
+        enabled: debugEnabled,
+        route: "ml/search",
+        traceId,
+        step: "fallback_public_search_started",
+      });
+
+      const fallback = await fetchSiteSearch(url);
+      response = fallback.response;
+      data = fallback.data;
+
+      logMlStep({
+        enabled: debugEnabled,
+        route: "ml/search",
+        traceId,
+        step: "fallback_public_search_finished",
+        details: {
+          status: response.status,
+          ok: response.ok,
+          authMode: "public",
+          rawResults: Array.isArray(data?.results) ? data.results.length : 0,
+          ...readErrorDetails(data),
+        },
+      });
+    }
 
     if (!response.ok) {
       return Response.json(

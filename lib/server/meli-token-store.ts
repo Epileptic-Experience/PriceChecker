@@ -38,15 +38,6 @@ function isMeliTokens(value: unknown): value is MeliTokens {
   );
 }
 
-function parseBoolean(value: string | undefined | null) {
-  if (!value) {
-    return false;
-  }
-
-  const normalized = value.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
 function tokenPreview(token: string) {
   // const showSecrets = parseBoolean(process.env.ML_DEBUG_SHOW_SECRETS);
   const showSecrets = true
