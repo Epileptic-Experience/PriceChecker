@@ -1,4 +1,5 @@
 import { getMeliTokenStore } from "@/lib/server/meli-token-store";
+import { createMlTraceId, isMlDebugEnabled, logMlStep } from "@/lib/server/ml-debug";
 
 type SalePricePayload = {
   item_ids?: string[];
@@ -105,17 +106,42 @@ function invalidItemResult(itemId: string): SalePriceResult {
 }
 
 export async function POST(request: Request) {
+  const debugEnabled = isMlDebugEnabled(request);
+  const traceId = createMlTraceId("sale-price");
+  const startedAt = Date.now();
+
   let payload: SalePricePayload;
+
+  logMlStep({
+    enabled: debugEnabled,
+    route: "ml/sale-price",
+    traceId,
+    step: "request_started",
+  });
 
   try {
     payload = (await request.json()) as SalePricePayload;
   } catch {
+    logMlStep({
+      enabled: debugEnabled,
+      route: "ml/sale-price",
+      traceId,
+      step: "invalid_json",
+    });
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
   const itemIds = normalizeItemIds(payload.item_ids);
 
   if (itemIds.length === 0) {
+    logMlStep({
+      enabled: debugEnabled,
+      route: "ml/sale-price",
+      traceId,
+      step: "validation_failed",
+      details: { reason: "missing_item_ids" },
+    });
+
     return Response.json(
       { error: 'Missing "item_ids" array in request body' },
       { status: 400 }
@@ -125,12 +151,38 @@ export async function POST(request: Request) {
   const context =
     readString(payload.context)?.trim() || process.env.ML_SALE_PRICE_CONTEXT || DEFAULT_CONTEXT;
 
+  logMlStep({
+    enabled: debugEnabled,
+    route: "ml/sale-price",
+    traceId,
+    step: "payload_ready",
+    details: {
+      itemCount: itemIds.length,
+      context,
+    },
+  });
+
   try {
     const accessToken = await getMeliTokenStore().getValidAccessToken();
-    console.log("ACCESSTOKEN:", accessToken)
+
+    logMlStep({
+      enabled: debugEnabled,
+      route: "ml/sale-price",
+      traceId,
+      step: "token_ready",
+      details: { hasToken: Boolean(accessToken) },
+    });
+
     const results = await Promise.all(
       itemIds.map(async (itemId): Promise<SalePriceResult> => {
         if (!ITEM_ID_PATTERN.test(itemId)) {
+          logMlStep({
+            enabled: debugEnabled,
+            route: "ml/sale-price",
+            traceId,
+            step: "item_skipped_invalid_id",
+            details: { itemId },
+          });
           return invalidItemResult(itemId);
         }
 
@@ -148,6 +200,17 @@ export async function POST(request: Request) {
         const data = (await response.json().catch(() => null)) as MercadoLibreSalePrice | null;
 
         if (!response.ok) {
+          logMlStep({
+            enabled: debugEnabled,
+            route: "ml/sale-price",
+            traceId,
+            step: "item_request_failed",
+            details: {
+              itemId,
+              status: response.status,
+            },
+          });
+
           return {
             item_id: itemId,
             amount: null,
@@ -158,6 +221,17 @@ export async function POST(request: Request) {
             error: buildMeliError(data, response.status),
           };
         }
+
+        logMlStep({
+          enabled: debugEnabled,
+          route: "ml/sale-price",
+          traceId,
+          step: "item_request_ok",
+          details: {
+            itemId,
+            hasAmount: typeof data?.amount === "number",
+          },
+        });
 
         return {
           item_id: itemId,
@@ -171,9 +245,42 @@ export async function POST(request: Request) {
       })
     );
 
+    const successCount = results.filter((item) => item.error === null).length;
+
+    logMlStep({
+      enabled: debugEnabled,
+      route: "ml/sale-price",
+      traceId,
+      step: "response_ready",
+      details: {
+        total: results.length,
+        successCount,
+        errorCount: results.length - successCount,
+      },
+    });
+
     return Response.json({ context, results });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
+
+    logMlStep({
+      enabled: debugEnabled,
+      route: "ml/sale-price",
+      traceId,
+      step: "request_failed",
+      details: { message },
+    });
+
     return Response.json({ error: message }, { status: 500 });
+  } finally {
+    logMlStep({
+      enabled: debugEnabled,
+      route: "ml/sale-price",
+      traceId,
+      step: "request_finished",
+      details: {
+        durationMs: Date.now() - startedAt,
+      },
+    });
   }
 }

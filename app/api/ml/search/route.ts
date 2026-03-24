@@ -1,4 +1,5 @@
 import { getMeliTokenStore } from "@/lib/server/meli-token-store";
+import { createMlTraceId, isMlDebugEnabled, logMlStep } from "@/lib/server/ml-debug";
 
 type SearchResult = {
   id: string;
@@ -40,21 +41,55 @@ function readMeliError(data: unknown, status: number) {
 }
 
 export async function GET(request: Request) {
+  const debugEnabled = isMlDebugEnabled(request);
+  const traceId = createMlTraceId("search");
+  const startedAt = Date.now();
+
   const { searchParams } = new URL(request.url);
   const q = searchParams.get("q")?.trim();
 
+  logMlStep({
+    enabled: debugEnabled,
+    route: "ml/search",
+    traceId,
+    step: "request_started",
+    details: { query: q ?? null },
+  });
+
   if (!q) {
+    logMlStep({
+      enabled: debugEnabled,
+      route: "ml/search",
+      traceId,
+      step: "validation_failed",
+      details: { reason: "missing_query" },
+    });
     return Response.json({ error: "Missing query" }, { status: 400 });
   }
 
   try {
     const accessToken = await getMeliTokenStore().getValidAccessToken();
-    console.log("ACCESSTOKEN:", accessToken)
+
+    logMlStep({
+      enabled: debugEnabled,
+      route: "ml/search",
+      traceId,
+      step: "token_ready",
+      details: { hasToken: Boolean(accessToken) },
+    });
 
     const url = new URL("https://api.mercadolibre.com/sites/MLA/search");
     url.searchParams.set("q", q);
     url.searchParams.set("status", "active");
     url.searchParams.set("limit", "20");
+
+    logMlStep({
+      enabled: debugEnabled,
+      route: "ml/search",
+      traceId,
+      step: "meli_request_started",
+      details: { url: url.toString() },
+    });
 
     const response = await fetch(url, {
       headers: {
@@ -63,7 +98,19 @@ export async function GET(request: Request) {
     });
 
     const data = (await response.json().catch(() => null)) as SiteSearchResponse | null;
-    console.log("DATA", data)
+
+    logMlStep({
+      enabled: debugEnabled,
+      route: "ml/search",
+      traceId,
+      step: "meli_request_finished",
+      details: {
+        status: response.status,
+        ok: response.ok,
+        rawResults: Array.isArray(data?.results) ? data.results.length : 0,
+      },
+    });
+
     if (!response.ok) {
       return Response.json(
         { error: readMeliError(data, response.status) },
@@ -91,9 +138,36 @@ export async function GET(request: Request) {
           : undefined,
       }));
 
+    logMlStep({
+      enabled: debugEnabled,
+      route: "ml/search",
+      traceId,
+      step: "response_ready",
+      details: { results: results.length },
+    });
+
     return Response.json(results);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
+
+    logMlStep({
+      enabled: debugEnabled,
+      route: "ml/search",
+      traceId,
+      step: "request_failed",
+      details: { message },
+    });
+
     return Response.json({ error: message }, { status: 500 });
+  } finally {
+    logMlStep({
+      enabled: debugEnabled,
+      route: "ml/search",
+      traceId,
+      step: "request_finished",
+      details: {
+        durationMs: Date.now() - startedAt,
+      },
+    });
   }
 }
