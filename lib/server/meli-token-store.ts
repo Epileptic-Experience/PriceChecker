@@ -1,4 +1,4 @@
-import { createClient, type RedisClientType } from "redis";
+import { createClient } from "redis";
 import { createMlTraceId, isMlDebugEnvEnabled, logMlStep } from "@/lib/server/ml-debug";
 
 if (typeof window !== "undefined") {
@@ -13,10 +13,12 @@ export type MeliTokens = {
 
 const REDIS_TOKEN_KEY = process.env.MELI_TOKEN_REDIS_KEY ?? "meli:tokens";
 
+type MeliRedisClient = ReturnType<typeof createClient>;
+
 type GlobalWithMeliStore = typeof globalThis & {
   __meliTokenStore?: MeliTokenStore;
-  __meliRedisClient?: RedisClientType;
-  __meliRedisConnectPromise?: Promise<RedisClientType>;
+  __meliRedisClient?: MeliRedisClient;
+  __meliRedisConnectPromise?: Promise<MeliRedisClient>;
 };
 
 const globalStore = globalThis as GlobalWithMeliStore;
