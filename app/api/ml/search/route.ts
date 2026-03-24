@@ -18,15 +18,16 @@ export async function GET(request: Request) {
 
   try {
     const accessToken = await getAccessToken();
+    const headers = {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    }
     const response = await fetch(
       `https://api.mercadolibre.com/sites/MLA/search?q=${encodeURIComponent(q)}`,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      }
+      headers
     );
-
+    console.log("headers", headers)
     const data = await response.json();
 
     if (!response.ok) {
@@ -42,7 +43,7 @@ export async function GET(request: Request) {
 
 async function getAccessToken() {
   const tokens = globalThis.meliTokens;
-
+  console.log("tokens", tokens)
   if (!tokens) {
     throw new Error("No tokens available. Authenticate first.");
   }
