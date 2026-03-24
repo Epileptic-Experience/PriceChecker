@@ -14,10 +14,17 @@ export async function POST(request: Request) {
   const redirect_uri = process.env.NEXT_PUBLIC_REDIRECT_URI;
 
   // Obtener el "code" desde el body del request
-  const { code } = await request.json();
+  const { code, code_verifier } = await request.json();
 
   if (!code) {
     return Response.json({ error: 'Missing "code" in request body' }, { status: 400 });
+  }
+
+  if (!code_verifier) {
+    return Response.json(
+      { error: 'Missing "code_verifier" in request body' },
+      { status: 400 }
+    );
   }
 
 
@@ -32,6 +39,7 @@ export async function POST(request: Request) {
         client_id: client_id!,
         client_secret: client_secret!,
         code: code!,
+        code_verifier: code_verifier!,
         redirect_uri: redirect_uri!,
       }),
     });
@@ -55,7 +63,7 @@ export async function POST(request: Request) {
     console.log("Access Token:", access_token);
     console.log("Refresh Token:", myRefreshToken);
 
-    return NextResponse.redirect(new URL("/", request.url));
+    return NextResponse.json({ ok: true });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
     return Response.json({ error: message }, { status: 500 });
