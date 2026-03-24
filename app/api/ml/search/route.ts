@@ -1035,7 +1035,7 @@ export async function GET(request: Request) {
       if (uniqueMapped.length > 0) {
         const enrichedBatch = await mapWithConcurrency(uniqueMapped, 8, enrichResult);
         const pricedBatch = enrichedBatch.filter(
-          (item) => typeof item.sale_price?.amount === "number"
+          (item) => typeof item.sale_price?.amount === "number" && item.sale_price.amount > 0
         );
 
         enrichedCount += enrichedBatch.length;

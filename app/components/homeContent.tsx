@@ -196,7 +196,7 @@ export default function Home() {
   for (const result of results) {
     const amount = result.sale_price?.amount;
 
-    if (typeof amount === "number") {
+    if (typeof amount === "number" && amount > 0) {
       priceList.push(amount);
     }
   }
@@ -204,7 +204,7 @@ export default function Home() {
   const priceSum = priceList.reduce((acc, value) => acc + value, 0);
   const averagePrice = priceList.length > 0 ? priceSum / priceList.length : null;
   const averageCurrency =
-    results.find((result) => typeof result.sale_price?.amount === "number")?.sale_price?.currency_id || "ARS";
+    results.find((result) => typeof result.sale_price?.amount === "number" && result.sale_price.amount > 0)?.sale_price?.currency_id || "ARS";
 
   return (
     <div className="flex flex-col items-center justify-center gap-4">
@@ -249,7 +249,7 @@ export default function Home() {
           const saleAmount = salePrice?.amount;
           const regularAmount = salePrice?.regular_amount;
           const currencyId = salePrice?.currency_id ?? "ARS";
-          const hasSalePrice = typeof saleAmount === "number";
+          const hasSalePrice = typeof saleAmount === "number" && saleAmount > 0;
           const hasRegularPrice =
           typeof regularAmount === "number" && (!hasSalePrice || regularAmount > saleAmount);
           const isOpportunity = hasSalePrice && averagePrice !== null && saleAmount < averagePrice;
