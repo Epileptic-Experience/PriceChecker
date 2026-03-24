@@ -50,7 +50,7 @@ export async function GET(request: Request) {
   try {
     const accessToken = await getMeliTokenStore().getValidAccessToken();
     console.log("ACCESSTOKEN:", accessToken)
-    
+
     const url = new URL("https://api.mercadolibre.com/sites/MLA/search");
     url.searchParams.set("q", q);
     url.searchParams.set("status", "active");
@@ -63,7 +63,7 @@ export async function GET(request: Request) {
     });
 
     const data = (await response.json().catch(() => null)) as SiteSearchResponse | null;
-
+    console.log("DATA", data)
     if (!response.ok) {
       return Response.json(
         { error: readMeliError(data, response.status) },
