@@ -10,9 +10,9 @@ declare global {
 }
 
 export async function POST(request: Request) {
-  const client_id = process.env.CLIENT_ID;
-  const client_secret = process.env.CLIENT_SECRET;
-  const redirect_uri = process.env.REDIRECT_URI;
+  const client_id = process.env.NEXT_PUBLIC_CLIENT_ID;
+  const client_secret = process.env.NEXT_PUBLIC_CLIENT_SECRET;
+  const redirect_uri = process.env.NEXT_PUBLIC_REDIRECT_URI;
 
   // Obtener el "code" que viene del redirect de MercadoLibre
   const { searchParams } = new URL(request.url);
