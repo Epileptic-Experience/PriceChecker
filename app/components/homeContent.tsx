@@ -14,8 +14,9 @@ export default function Home() {
   const handleAuth = async () => {
     try {
       const res = axios.post("/api/ml/auth", { code });
+      console.log(code, "CODE")
+      console.log(res, "RES");
 
-      console.log(res);
     } catch (error) {
       console.log(error, "error al autorizar");
     }
