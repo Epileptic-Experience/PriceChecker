@@ -34,6 +34,25 @@ type ProductDetailResponse = {
   error?: string;
 };
 
+type ProductItemsResponse = {
+  results?: Array<{
+    item_id?: string;
+    price?: number;
+    currency_id?: string;
+    status?: string;
+  }>;
+  message?: string;
+  error?: string;
+  cause?: unknown;
+};
+
+type ProductItemsCandidate = {
+  itemId: string | null;
+  price: number | null;
+  currencyId: string | null;
+  error: string | null;
+};
+
 type MercadoLibreSalePrice = {
   amount?: number;
   regular_amount?: number;
@@ -70,12 +89,14 @@ type ProductResolution = {
   error: string | null;
   winnerPrice: number | null;
   winnerCurrency: string | null;
+  itemsPrice: number | null;
+  itemsCurrency: string | null;
 };
 
 type FallbackPrice = {
   amount: number;
   currencyId: string;
-  source: "buy_box_winner" | "product_page";
+  source: "buy_box_winner" | "products_items" | "product_page";
 };
 
 const DEFAULT_SITE_ID = "MLA";
@@ -312,6 +333,61 @@ async function fetchProductPagePrice(productId: string) {
   }
 }
 
+async function resolveProductToItemIdFromItems(
+  productId: string,
+  accessToken: string
+): Promise<ProductItemsCandidate> {
+  const url = new URL(`https://api.mercadolibre.com/products/${productId}/items`);
+  url.searchParams.set("limit", "20");
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  const data = (await response.json().catch(() => null)) as ProductItemsResponse | null;
+
+  if (!response.ok) {
+    return {
+      itemId: null,
+      price: null,
+      currencyId: null,
+      error:
+        typeof data?.message === "string"
+          ? `products/items (${response.status}): ${data.message}`
+          : `products/items (HTTP ${response.status})`,
+    };
+  }
+
+  const rows = Array.isArray(data?.results) ? data.results : [];
+  const candidates = rows.filter(
+    (row): row is { item_id: string; price?: number; currency_id?: string; status?: string } =>
+      typeof row.item_id === "string"
+  );
+
+  if (candidates.length === 0) {
+    return {
+      itemId: null,
+      price: null,
+      currencyId: null,
+      error: "products/items no devolvio item_id.",
+    };
+  }
+
+  const preferred =
+    candidates.find((row) => row.status === "active") ||
+    candidates.find((row) => row.status === "paused") ||
+    candidates[0];
+
+  return {
+    itemId: preferred.item_id,
+    price: readNumber(preferred.price),
+    currencyId: readString(preferred.currency_id),
+    error: null,
+  };
+}
+
 async function resolveProductToItemId(productId: string, accessToken: string): Promise<ProductResolution> {
   const url = new URL(`https://api.mercadolibre.com/products/${productId}`);
 
@@ -324,35 +400,47 @@ async function resolveProductToItemId(productId: string, accessToken: string): P
   const data = (await response.json().catch(() => null)) as ProductDetailResponse | null;
   const winnerPrice = readNumber(data?.buy_box_winner?.price);
   const winnerCurrency = readString(data?.buy_box_winner?.currency_id);
-
-  if (!response.ok) {
-    return {
-      itemId: null,
-      error:
-        typeof data?.message === "string"
-          ? `No se pudo resolver producto (${response.status}): ${data.message}`
-          : `No se pudo resolver producto (HTTP ${response.status})`,
-      winnerPrice,
-      winnerCurrency,
-    };
-  }
-
   const itemId = readString(data?.buy_box_winner?.item_id);
 
-  if (!itemId) {
+  if (response.ok && itemId) {
     return {
-      itemId: null,
-      error: "El producto no tiene buy_box_winner con item_id.",
+      itemId,
+      error: null,
       winnerPrice,
       winnerCurrency,
+      itemsPrice: null,
+      itemsCurrency: null,
     };
   }
 
+  const baseError = !response.ok
+    ? typeof data?.message === "string"
+      ? `No se pudo resolver producto (${response.status}): ${data.message}`
+      : `No se pudo resolver producto (HTTP ${response.status})`
+    : "El producto no tiene buy_box_winner con item_id.";
+
+  const fromItems = await resolveProductToItemIdFromItems(productId, accessToken);
+
+  if (fromItems.itemId) {
+    return {
+      itemId: fromItems.itemId,
+      error: null,
+      winnerPrice,
+      winnerCurrency,
+      itemsPrice: fromItems.price,
+      itemsCurrency: fromItems.currencyId,
+    };
+  }
+
+  const combinedError = [baseError, fromItems.error].filter(Boolean).join(" | ");
+
   return {
-    itemId,
-    error: null,
+    itemId: null,
+    error: combinedError || "No se pudo resolver item_id desde product_id.",
     winnerPrice,
     winnerCurrency,
+    itemsPrice: fromItems.price,
+    itemsCurrency: fromItems.currencyId,
   };
 }
 
@@ -382,16 +470,29 @@ async function mapWithConcurrency<T, R>(values: T[], limit: number, worker: (val
   return results;
 }
 
-function readFallbackFromWinner(winnerPrice: number | null, winnerCurrency: string | null): FallbackPrice | null {
-  if (winnerPrice === null) {
-    return null;
+function readFallbackPrice(input: {
+  winnerPrice: number | null;
+  winnerCurrency: string | null;
+  itemsPrice: number | null;
+  itemsCurrency: string | null;
+}): FallbackPrice | null {
+  if (input.winnerPrice !== null) {
+    return {
+      amount: input.winnerPrice,
+      currencyId: input.winnerCurrency || "ARS",
+      source: "buy_box_winner",
+    };
   }
 
-  return {
-    amount: winnerPrice,
-    currencyId: winnerCurrency || "ARS",
-    source: "buy_box_winner",
-  };
+  if (input.itemsPrice !== null) {
+    return {
+      amount: input.itemsPrice,
+      currencyId: input.itemsCurrency || "ARS",
+      source: "products_items",
+    };
+  }
+
+  return null;
 }
 
 export async function GET(request: Request) {
@@ -403,7 +504,7 @@ export async function GET(request: Request) {
   const q = searchParams.get("q")?.trim();
   const siteId = (searchParams.get("site_id")?.trim() || DEFAULT_SITE_ID).toUpperCase();
   const domainId = searchParams.get("domain_id")?.trim() || DEFAULT_DOMAIN_ID;
-  const context = searchParams.get("context")?.trim() || process.env.ML_SALE_PRICE_CONTEXT || DEFAULT_CONTEXT;
+  const context = searchParams.get("context")?.trim() || DEFAULT_CONTEXT;
   const includePrices = searchParams.get("include_prices") !== "false";
   const requestedLimit = Number.parseInt(searchParams.get("limit") || "", 10);
   const limit = Number.isNaN(requestedLimit)
@@ -546,6 +647,8 @@ export async function GET(request: Request) {
       let finalItemId: string | null = null;
       let winnerPrice: number | null = null;
       let winnerCurrency: string | null = null;
+      let itemsPrice: number | null = null;
+      let itemsCurrency: string | null = null;
 
       if (ITEM_ID_PATTERN.test(item.id)) {
         finalItemId = item.id;
@@ -553,11 +656,13 @@ export async function GET(request: Request) {
         const resolved = await resolveProductToItemId(item.id, accessToken);
         winnerPrice = resolved.winnerPrice;
         winnerCurrency = resolved.winnerCurrency;
+        itemsPrice = resolved.itemsPrice;
+        itemsCurrency = resolved.itemsCurrency;
 
         if (!resolved.itemId) {
-          const winnerFallback = readFallbackFromWinner(winnerPrice, winnerCurrency);
+          const apiFallback = readFallbackPrice({ winnerPrice, winnerCurrency, itemsPrice, itemsCurrency });
 
-          if (winnerFallback) {
+          if (apiFallback) {
             logMlStep({
               enabled: debugEnabled,
               route: "ml/search",
@@ -565,7 +670,7 @@ export async function GET(request: Request) {
               step: "item_price_fallback_used",
               details: {
                 productId: item.id,
-                source: winnerFallback.source,
+                source: apiFallback.source,
                 reason: resolved.error,
               },
             });
@@ -573,9 +678,9 @@ export async function GET(request: Request) {
             return {
               ...item,
               sale_price: {
-                amount: winnerFallback.amount,
+                amount: apiFallback.amount,
                 regular_amount: null,
-                currency_id: winnerFallback.currencyId,
+                currency_id: apiFallback.currencyId,
                 error: null,
               },
             };
@@ -658,8 +763,8 @@ export async function GET(request: Request) {
       if (!salePriceResponse.ok) {
         const salePriceError = buildSalePriceError(salePriceData, salePriceResponse.status);
 
-        const winnerFallback = readFallbackFromWinner(winnerPrice, winnerCurrency);
-        if (winnerFallback) {
+        const apiFallback = readFallbackPrice({ winnerPrice, winnerCurrency, itemsPrice, itemsCurrency });
+        if (apiFallback) {
           logMlStep({
             enabled: debugEnabled,
             route: "ml/search",
@@ -668,7 +773,7 @@ export async function GET(request: Request) {
             details: {
               productId: item.id,
               itemId: finalItemId,
-              source: winnerFallback.source,
+              source: apiFallback.source,
               reason: salePriceError,
             },
           });
@@ -677,9 +782,9 @@ export async function GET(request: Request) {
             ...item,
             resolved_item_id: finalItemId,
             sale_price: {
-              amount: winnerFallback.amount,
+              amount: apiFallback.amount,
               regular_amount: null,
-              currency_id: winnerFallback.currencyId,
+              currency_id: apiFallback.currencyId,
               error: null,
             },
           };
@@ -753,8 +858,8 @@ export async function GET(request: Request) {
         };
       }
 
-      const winnerFallback = readFallbackFromWinner(winnerPrice, winnerCurrency);
-      if (winnerFallback) {
+      const apiFallback = readFallbackPrice({ winnerPrice, winnerCurrency, itemsPrice, itemsCurrency });
+      if (apiFallback) {
         logMlStep({
           enabled: debugEnabled,
           route: "ml/search",
@@ -763,7 +868,7 @@ export async function GET(request: Request) {
           details: {
             productId: item.id,
             itemId: finalItemId,
-            source: winnerFallback.source,
+            source: apiFallback.source,
             reason: "sale_price_amount_null",
           },
         });
@@ -772,9 +877,9 @@ export async function GET(request: Request) {
           ...item,
           resolved_item_id: finalItemId,
           sale_price: {
-            amount: winnerFallback.amount,
+            amount: apiFallback.amount,
             regular_amount: null,
-            currency_id: winnerFallback.currencyId,
+            currency_id: apiFallback.currencyId,
             error: null,
           },
         };
