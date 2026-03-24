@@ -17,6 +17,15 @@ type MercadoLibreSalePrice = {
   cause?: unknown;
 };
 
+type ProductDetailResponse = {
+  id?: string;
+  buy_box_winner?: {
+    item_id?: string;
+  } | null;
+  message?: string;
+  error?: string;
+};
+
 type SalePriceResult = {
   item_id: string;
   amount: number | null;
@@ -29,6 +38,7 @@ type SalePriceResult = {
 
 const DEFAULT_CONTEXT = "channel_marketplace,buyer_loyalty_3";
 const ITEM_ID_PATTERN = /^[A-Z]{3}\d{9,}$/;
+const PRODUCT_ID_PATTERN = /^[A-Z]{3}\d{7,}$/;
 
 function normalizeItemIds(value: unknown) {
   if (!Array.isArray(value)) {
@@ -92,16 +102,39 @@ function buildMeliError(data: MercadoLibreSalePrice | null, status: number) {
   return `HTTP ${status}: ${details.join(" - ")}`;
 }
 
-function invalidItemResult(itemId: string): SalePriceResult {
+async function resolveProductToItemId(productId: string, accessToken: string) {
+  const url = new URL(`https://api.mercadolibre.com/products/${productId}`);
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  const data = (await response.json().catch(() => null)) as ProductDetailResponse | null;
+
+  if (!response.ok) {
+    return {
+      itemId: null,
+      error:
+        typeof data?.message === "string"
+          ? `No se pudo resolver producto (${response.status}): ${data.message}`
+          : `No se pudo resolver producto (HTTP ${response.status})`,
+    };
+  }
+
+  const itemId = readString(data?.buy_box_winner?.item_id);
+
+  if (!itemId) {
+    return {
+      itemId: null,
+      error: "El producto no tiene buy_box_winner con item_id.",
+    };
+  }
+
   return {
-    item_id: itemId,
-    amount: null,
-    regular_amount: null,
-    currency_id: null,
-    price_id: null,
-    reference_date: null,
-    error:
-      "Invalid ITEM_ID for /items/{id}/sale_price. Esperado formato de publicacion (ej: MLA1234567890), no ID de catalogo/producto.",
+    itemId,
+    error: null,
   };
 }
 
@@ -174,19 +207,52 @@ export async function POST(request: Request) {
     });
 
     const results = await Promise.all(
-      itemIds.map(async (itemId): Promise<SalePriceResult> => {
-        if (!ITEM_ID_PATTERN.test(itemId)) {
+      itemIds.map(async (inputId): Promise<SalePriceResult> => {
+        let finalItemId = inputId;
+
+        if (!ITEM_ID_PATTERN.test(inputId)) {
+          if (!PRODUCT_ID_PATTERN.test(inputId)) {
+            return {
+              item_id: inputId,
+              amount: null,
+              regular_amount: null,
+              currency_id: null,
+              price_id: null,
+              reference_date: null,
+              error: "ID invalido para item/producto.",
+            };
+          }
+
+          const resolved = await resolveProductToItemId(inputId, accessToken);
+
           logMlStep({
             enabled: debugEnabled,
             route: "ml/sale-price",
             traceId,
-            step: "item_skipped_invalid_id",
-            details: { itemId },
+            step: "product_resolution",
+            details: {
+              productId: inputId,
+              resolvedItemId: resolved.itemId,
+              resolutionError: resolved.error,
+            },
           });
-          return invalidItemResult(itemId);
+
+          if (!resolved.itemId) {
+            return {
+              item_id: inputId,
+              amount: null,
+              regular_amount: null,
+              currency_id: null,
+              price_id: null,
+              reference_date: null,
+              error: resolved.error ?? "No se pudo resolver item_id desde product_id.",
+            };
+          }
+
+          finalItemId = resolved.itemId;
         }
 
-        const url = new URL(`https://api.mercadolibre.com/items/${itemId}/sale_price`);
+        const url = new URL(`https://api.mercadolibre.com/items/${finalItemId}/sale_price`);
         if (context) {
           url.searchParams.set("context", context);
         }
@@ -206,13 +272,14 @@ export async function POST(request: Request) {
             traceId,
             step: "item_request_failed",
             details: {
-              itemId,
+              inputId,
+              finalItemId,
               status: response.status,
             },
           });
 
           return {
-            item_id: itemId,
+            item_id: inputId,
             amount: null,
             regular_amount: null,
             currency_id: null,
@@ -228,13 +295,14 @@ export async function POST(request: Request) {
           traceId,
           step: "item_request_ok",
           details: {
-            itemId,
+            inputId,
+            finalItemId,
             hasAmount: typeof data?.amount === "number",
           },
         });
 
         return {
-          item_id: itemId,
+          item_id: inputId,
           amount: readNumber(data?.amount),
           regular_amount: readNumber(data?.regular_amount),
           currency_id: readString(data?.currency_id),
