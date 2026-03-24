@@ -43,7 +43,7 @@ export async function GET(request: Request) {
           : "MercadoLibre request failed.";
       return Response.json({ error: message }, { status: response.status });
     }
-
+    console.log(data)
     return Response.json(data.results ?? []);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
