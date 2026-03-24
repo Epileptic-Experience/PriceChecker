@@ -1,25 +1,45 @@
 "use client"
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import axios from "axios";
+
 
 export default function Home() {
   const [query, setQuery] = useState<string>("")
   const [results, setResults] = useState<any[]>([])
-  const handleSearch = async () => {
-    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-    const data = await res.json();
+  const searchParams = useSearchParams();
+  const code = searchParams.get("code");
 
+
+  const handleAuth = async () => {
+    try {
+      const res = await axios.post(`/api/ml/auth?code=${code}`)
+      console.log(res)
+    } catch (error) {
+      console.log(error, "error al autorizar")
+    }
+
+  }
+
+  useEffect(() => {
+    if (code && code !== "") {
+      handleAuth()
+    }
+  }, [code])
+
+  const handleSearch = async () => {
+    const res = await fetch(`/api/ml/search?q=${encodeURIComponent(query)}`);
+    const data = await res.json();
     if (!res.ok) {
       console.error("Fallo la busqueda", data);
       return;
     }
-
     setResults(data);
   };
 
   const handleLogin = () => {
     const client_id = process.env.NEXT_PUBLIC_CLIENT_ID;
     const redirect_uri = process.env.NEXT_PUBLIC_REDIRECT_URI;
-
     const url = `https://auth.mercadolibre.com.ar/authorization?response_type=code&client_id=${client_id}&redirect_uri=${redirect_uri}`;
 
     window.location.href = url;

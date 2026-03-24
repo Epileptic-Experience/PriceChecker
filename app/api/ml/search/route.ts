@@ -9,8 +9,8 @@ export async function GET(request: Request) {
     return Response.json({ error: "Missing query" }, { status: 400 });
   }
 
-  const accessToken = getAccessToken()
   try {
+    const accessToken = await getAccessToken()
     const response = await axios.get(
       `https://api.mercadolibre.com/sites/MLA/search?q=${encodeURIComponent(q)}`,
       {

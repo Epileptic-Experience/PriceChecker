@@ -35,9 +35,7 @@ export async function POST(request: Request) {
       }
     );
 
-
     const { access_token, refresh_token, expires_in } = response.data;
-
 
     const myRefreshToken = refresh_token;
     globalThis.meliTokens = {
