@@ -190,8 +190,8 @@ export default function Home() {
 
     void startLogin();
   };
-  const priceList: number[] = []
 
+  const priceList: number[] = [];
 
   for (const result of results) {
     const amount = result.sale_price?.amount;
@@ -201,9 +201,11 @@ export default function Home() {
     }
   }
 
-
   const priceSum = priceList.reduce((acc, value) => acc + value, 0);
-  const averagePrice = priceList.length > 0 ? priceSum / priceList.length : null
+  const averagePrice = priceList.length > 0 ? priceSum / priceList.length : null;
+  const averageCurrency =
+    results.find((result) => typeof result.sale_price?.amount === "number")?.sale_price?.currency_id || "ARS";
+
   return (
     <div className="flex flex-col items-center justify-center gap-4">
       <button onClick={handleLogin}>Conectar MercadoLibre</button>
@@ -228,8 +230,18 @@ export default function Home() {
         </button>
       </div>
 
+      <div className="w-full max-w-6xl px-4 text-sm text-neutral-700">
+        {averagePrice !== null ? (
+          <p>
+            Promedio de precios: {formatCurrency(averagePrice, averageCurrency)}{" "}
+            (calculado con {priceList.length} productos con precio)
+          </p>
+        ) : (
+          <p>Sin precios para calcular promedio.</p>
+        )}
+      </div>
+
       <div className="grid w-full max-w-6xl grid-cols-1 gap-4 px-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {averagePrice}
         {results.map((item) => {
           const imageUrl = item.pictures?.[0]?.url;
           const description = item.short_description?.content?.trim();
@@ -239,7 +251,8 @@ export default function Home() {
           const currencyId = salePrice?.currency_id ?? "ARS";
           const hasSalePrice = typeof saleAmount === "number";
           const hasRegularPrice =
-            typeof regularAmount === "number" && (!hasSalePrice || regularAmount > saleAmount);
+          typeof regularAmount === "number" && (!hasSalePrice || regularAmount > saleAmount);
+          const isOpportunity = hasSalePrice && averagePrice !== null && saleAmount < averagePrice;
 
           return (
             <article
@@ -263,6 +276,7 @@ export default function Home() {
               <div className="flex flex-col gap-3 p-4">
                 <div className="flex items-start justify-between gap-3">
                   <h2 className="line-clamp-2 text-sm font-semibold text-neutral-900">{item.name}</h2>
+                  <h2 className="line-clamp-2 text-sm font-semibold text-neutral-900">{isOpportunity ? "OPORTUNIDAD" : ""}</h2>
                   {item.status && (
                     <span className="rounded-full bg-neutral-100 px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-neutral-600">
                       {item.status}
@@ -281,6 +295,10 @@ export default function Home() {
                     <>
                       <p className="text-lg font-semibold text-neutral-900">
                         {formatCurrency(saleAmount, currencyId)}
+                      </p>
+                      <p>
+
+                      
                       </p>
                       {hasRegularPrice && (
                         <p className="text-xs text-neutral-500 line-through">
