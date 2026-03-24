@@ -1,14 +1,8 @@
 import { NextResponse } from "next/server";
-
-declare global {
-  var meliTokens: {
-    access_token: string;
-    refresh_token: string;
-    expires_at: number;
-  } | undefined;
-}
+import { getMeliTokenStore } from "@/lib/server/meli-token-store";
 
 export async function POST(request: Request) {
+  const tokenStore = getMeliTokenStore();
   const client_id = process.env.NEXT_PUBLIC_CLIENT_ID;
   const client_secret = process.env.CLIENT_SECRET;
   const redirect_uri = process.env.NEXT_PUBLIC_REDIRECT_URI;
@@ -52,16 +46,11 @@ export async function POST(request: Request) {
 
     const { access_token, refresh_token, expires_in } = data;
 
-    const myRefreshToken = refresh_token;
-    globalThis.meliTokens = {
+    tokenStore.set({
       access_token,
       refresh_token,
       expires_at: Date.now() + expires_in * 1000,
-    };
-
-
-    console.log("Access Token:", access_token);
-    console.log("Refresh Token:", myRefreshToken);
+    });
 
     return NextResponse.json({ ok: true });
   } catch (error: unknown) {
