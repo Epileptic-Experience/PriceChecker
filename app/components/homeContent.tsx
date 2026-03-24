@@ -1,4 +1,5 @@
-"use client"
+"use client";
+
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -16,6 +17,20 @@ type SearchResult = {
   short_description?: {
     content?: string;
   };
+  sale_price?: {
+    amount: number | null;
+    regular_amount: number | null;
+    currency_id: string | null;
+    error: string | null;
+  };
+};
+
+type SalePriceResult = {
+  item_id: string;
+  amount: number | null;
+  regular_amount: number | null;
+  currency_id: string | null;
+  error: string | null;
 };
 
 const PKCE_VERIFIER_KEY = "meli_pkce_verifier";
@@ -43,12 +58,24 @@ async function createCodeChallenge(codeVerifier: string) {
   return encodeBase64Url(digest);
 }
 
+function formatCurrency(amount: number, currencyId: string) {
+  try {
+    return new Intl.NumberFormat("es-AR", {
+      style: "currency",
+      currency: currencyId,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    return `${amount.toFixed(2)} ${currencyId}`;
+  }
+}
 
 export default function Home() {
   const [query, setQuery] = useState<string>("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [authError, setAuthError] = useState<string | null>(null);
   const [isAuthorizing, setIsAuthorizing] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
   const code = searchParams.get("code");
@@ -115,13 +142,79 @@ export default function Home() {
   }, [code, router, state]);
 
   const handleSearch = async () => {
-    const res = await fetch(`/api/ml/search?q=${encodeURIComponent(query)}`);
-    const data = await res.json();
-    if (!res.ok) {
-      console.error("Fallo la busqueda", data);
+    const normalizedQuery = query.trim();
+
+    if (!normalizedQuery) {
+      setResults([]);
       return;
     }
-    setResults(data);
+
+    setIsSearching(true);
+
+    try {
+      const searchResponse = await fetch(`/api/ml/search?q=${encodeURIComponent(normalizedQuery)}`);
+      const searchData = await searchResponse.json();
+
+      if (!searchResponse.ok) {
+        console.error("Fallo la busqueda", searchData);
+        setResults([]);
+        return;
+      }
+
+      const searchResults = Array.isArray(searchData) ? (searchData as SearchResult[]) : [];
+
+      if (searchResults.length === 0) {
+        setResults([]);
+        return;
+      }
+
+      const salePriceResponse = await fetch("/api/ml/sale-price", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          item_ids: searchResults.map((item) => item.id),
+        }),
+      });
+
+      if (!salePriceResponse.ok) {
+        const errorPayload = await salePriceResponse.json().catch(() => null);
+        console.error("Fallo la consulta de precios", errorPayload);
+        setResults(searchResults);
+        return;
+      }
+
+      const salePriceData = (await salePriceResponse.json().catch(() => null)) as
+        | { results?: SalePriceResult[] }
+        | null;
+
+      const salePriceResults = Array.isArray(salePriceData?.results) ? salePriceData.results : [];
+      const pricesByItemId = new Map(salePriceResults.map((price) => [price.item_id, price]));
+
+      const mergedResults = searchResults.map((item) => {
+        const itemPrice = pricesByItemId.get(item.id);
+
+        return {
+          ...item,
+          sale_price: itemPrice
+            ? {
+                amount: itemPrice.amount,
+                regular_amount: itemPrice.regular_amount,
+                currency_id: itemPrice.currency_id,
+                error: itemPrice.error,
+              }
+            : undefined,
+        };
+      });
+
+      setResults(mergedResults);
+    } catch (error: unknown) {
+      console.error("Error inesperado en la busqueda", error);
+      setResults([]);
+    } finally {
+      setIsSearching(false);
+    }
   };
 
   const handleLogin = () => {
@@ -166,10 +259,11 @@ export default function Home() {
         />
 
         <button
-          className="rounded-md bg-black px-5 py-3 text-white"
+          className="rounded-md bg-black px-5 py-3 text-white disabled:cursor-not-allowed disabled:opacity-70"
           onClick={handleSearch}
+          disabled={isSearching}
         >
-          Buscar
+          {isSearching ? "Buscando..." : "Buscar"}
         </button>
       </div>
 
@@ -177,6 +271,13 @@ export default function Home() {
         {results.map((item) => {
           const imageUrl = item.pictures?.[0]?.url;
           const description = item.short_description?.content?.trim();
+          const salePrice = item.sale_price;
+          const saleAmount = salePrice?.amount;
+          const regularAmount = salePrice?.regular_amount;
+          const currencyId = salePrice?.currency_id ?? "ARS";
+          const hasSalePrice = typeof saleAmount === "number";
+          const hasRegularPrice =
+            typeof regularAmount === "number" && (!hasSalePrice || regularAmount > saleAmount);
 
           return (
             <article
@@ -193,17 +294,13 @@ export default function Home() {
                     className="object-cover"
                   />
                 ) : (
-                  <div className="px-6 text-center text-sm text-neutral-500">
-                    Sin imagen
-                  </div>
+                  <div className="px-6 text-center text-sm text-neutral-500">Sin imagen</div>
                 )}
               </div>
 
               <div className="flex flex-col gap-3 p-4">
                 <div className="flex items-start justify-between gap-3">
-                  <h2 className="line-clamp-2 text-sm font-semibold text-neutral-900">
-                    {item.name}
-                  </h2>
+                  <h2 className="line-clamp-2 text-sm font-semibold text-neutral-900">{item.name}</h2>
                   {item.status && (
                     <span className="rounded-full bg-neutral-100 px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-neutral-600">
                       {item.status}
@@ -217,11 +314,24 @@ export default function Home() {
                   {item.domain_id && <p>Dominio: {item.domain_id}</p>}
                 </div>
 
-                {description && (
-                  <p className="line-clamp-4 text-sm text-neutral-600">
-                    {description}
-                  </p>
-                )}
+                <div className="space-y-1">
+                  {hasSalePrice ? (
+                    <>
+                      <p className="text-lg font-semibold text-neutral-900">
+                        {formatCurrency(saleAmount, currencyId)}
+                      </p>
+                      {hasRegularPrice && (
+                        <p className="text-xs text-neutral-500 line-through">
+                          {formatCurrency(regularAmount, currencyId)}
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-sm text-neutral-500">Precio no disponible</p>
+                  )}
+                </div>
+
+                {description && <p className="line-clamp-4 text-sm text-neutral-600">{description}</p>}
               </div>
             </article>
           );
