@@ -1,11 +1,24 @@
-const query = process.argv[2] ?? "iphone";
-const url = `https://api.mercadolibre.com/sites/MLA/search?q=${encodeURIComponent(query)}`;
+const ACCESS_TOKEN =
+  process.env.ML_ACCESS_TOKEN ??
+  "APP_USR-578684441741656-032412-8c2360b2a597b3f969951d9b5fc9e4b3-471400356";
+
+const query = (process.argv[2] ?? "iphone").trim();
 
 async function main() {
-  const response = await fetch(url);
+  const url = new URL("https://api.mercadolibre.com/products/search");
+  url.searchParams.set("status", "active");
+  url.searchParams.set("site_id", "MLA");
+  url.searchParams.set("q", query);
+
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${ACCESS_TOKEN}`,
+    },
+  });
 
   const data = await response.json();
 
+  console.log(`GET ${url.toString()}`);
   console.log("Status:", response.status);
 
   if (!response.ok) {
@@ -20,10 +33,10 @@ async function main() {
     JSON.stringify(
       results.slice(0, 5).map((item) => ({
         id: item.id,
-        title: item.title,
-        price: item.price,
-        currency_id: item.currency_id,
-        permalink: item.permalink,
+        name: item.name,
+        domain_id: item.domain_id,
+        catalog_product_id: item.catalog_product_id,
+        status: item.status,
       })),
       null,
       2
