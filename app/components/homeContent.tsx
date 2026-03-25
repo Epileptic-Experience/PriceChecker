@@ -145,7 +145,7 @@ export default function Home() {
 
     try {
       const searchResponse = await fetch(
-        `/api/ml/search?q=${encodeURIComponent(normalizedQuery)}&limit=100`
+        `/api/ml/search?q=${encodeURIComponent(normalizedQuery)}&limit=100&debug=true`
       );
       const searchData = await searchResponse.json().catch(() => null);
 
